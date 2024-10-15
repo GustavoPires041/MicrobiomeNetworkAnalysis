@@ -1,0 +1,132 @@
+---
+title: "Processing"
+output: html_notebook
+---
+Neste notebook faremos a limpeza dos dados, ajustando colunas e filtrando amostras com cobertura de sequenciamento baixa, e também slecionaremos o core microbiome, baseado em prevalência e abundância.
+
+```{r setup}
+#setar diretório de trabalho para a pasta do projeto
+knitr::opts_knit$set(root.dir = '/home/gustavo/Projeto')
+```
+
+## Importação de dados, pacotes e funções personalizadas
+```{r}
+#importação de bibliotecas
+library(microbiome)
+library(MicrobiotaProcess)
+library(phyloseq)
+library(tidyverse)
+library(Biostrings)
+library(ggplot2)
+#importar funções utilizadas
+source(file = "source/clean_bacteria.R", local = TRUE)
+source(file = "source/clean_fungi.R", local = TRUE)
+source(file = "source/core_bacteria.R", local = TRUE)
+#importar dados brutos (já transformados em phyloseq antes)
+load("data/raw/phyloseqbacteria.rds")
+load("data/raw/phyloseqfungo.rds")
+```
+## Limpeza dos dados metagenômicos
+ 
+Aplicamos a função clean para realizar as operações de limpeza, para mais detalhes, olhar o script da função na pasta "source" do projeto
+```{r}
+#limpar phyloseq
+bac_split <- clean_pseq(bacteria)
+fun_split <- clean_pseq(fungi)
+#Filtrar só os locais de interesse
+bac_split = bac_split[c("Floor","Scalp", "Wall")]
+fun_split = fun_split[c("Floor","Scalp", "Wall")]
+
+```
+Alguns parâmetros dos dados:
+
+Bactéria:
+```{r}
+source(file = "source/describe_phyloseq.R", local = TRUE)
+# Aplica a função para cada objeto na lista e imprime as informações
+nomes <- names(bac_split)  # Obtém os nomes dos objetos na lista
+for (i in seq_along(bac_split)) {
+  describe_phyloseq(bac_split[[i]], nomes[i])
+}
+
+```
+Fungos:
+```{r}
+source(file = "source/describe_phyloseq.R", local = TRUE)
+# Aplica a função para cada objeto na lista e imprime as informações
+nomes <- names(fun_split)  # Obtém os nomes dos objetos na lista
+for (i in seq_along(fun_split)) {
+  describe_phyloseq(fun_split[[i]], nomes[i])
+}
+
+```
+
+## Seleção do core microbiome
+
+
+Aqui selecionamos o core microbiome. O corte de abundância foi baixo, deixando taxa que representam no mónimo 0,5% do total da amostra. Para prevalência, foi selecionado 30% para que ajude na hora de fazer as redes, permitindo uma correlação mais eficiente. A idéia é deixar taxa menos abundantes pois mesmo que o taxon esteja em baixa quantidade, ele pode ter uma função ecológica importante (ver artigo Microbiome dark matter).
+
+```{r}
+#selecionar os core members
+core_floor_bac <- core(bac_split$Floor, corte_prev = 0.15, corte_abund = 0.00)
+core_wall_bac <- core(bac_split$Wall, corte_prev = 0.15,corte_abund = 0.00)
+core_scalp_bac <- core(bac_split$Scalp, corte_prev = 0.15,corte_abund = 0.00)
+#filtrar os dados originais para manter apenas os core members no formato phyloseq
+core_floor_bac <- subset_taxa(bac_split$Floor, taxa_names(bac_split$Floor) %in% rownames(core_floor_bac))
+core_wall_bac <- subset_taxa(bac_split$Wall, taxa_names(bac_split$Wall) %in% rownames(core_wall_bac)) 
+core_scalp_bac <-  subset_taxa(bac_split$Scalp, taxa_names(bac_split$Scalp) %in% rownames(core_scalp_bac)) 
+```
+
+
+```{r}
+#selecionar os core members
+core_floor_fun <- core(fun_split$Floor, corte_prev = 0.15, corte_abund = 0.00)
+core_wall_fun <- core(fun_split$Wall, corte_prev = 0.15,corte_abund = 0.00)
+core_scalp_fun <- core(fun_split$Scalp, corte_prev = 0.15,corte_abund = 0.00)
+#filtrar os dados originais para manter apenas os core members no formato phyloseq
+core_floor_fun <- subset_taxa(fun_split$Floor, taxa_names(fun_split$Floor) %in% rownames(core_floor_fun))
+core_wall_fun <- subset_taxa(fun_split$Wall, taxa_names(fun_split$Wall) %in% rownames(core_wall_fun)) 
+core_scalp_fun <-  subset_taxa(fun_split$Scalp, taxa_names(fun_split$Scalp) %in% rownames(core_scalp_fun)) 
+```
+
+### Gerar tabela com comparativo de métricas para os metadados 
+
+```{r}
+#criar lista de objetos para exportação e exportar
+pseq_core <- list(floor_bac = core_floor_bac,
+                      floor_fun = core_floor_fun,
+                      wall_bac = core_wall_bac,
+                      wall_fun = core_wall_fun, 
+                      scalp_bac = core_scalp_bac, 
+                      scalp_fun = core_scalp_fun  )
+
+```
+
+
+```{r}
+source(file = "source/descrever_phyloseq_lista.R", local = TRUE)
+
+# Utilizando a função para comparar os phyloseqs na lista e obter as estatísticas resumidas de abundância
+#para bacteria
+estatisticas_bac = cbind(descrever_phyloseqs_lista(bac_split),
+                         descrever_phyloseqs_lista(pseq_core[c("floor_bac","wall_bac","scalp_bac")]))
+names(estatisticas_bac) = c("Floor","Scalp", "Wall","Floor (Core)", "Wall (Core)", "Scalp (Core)")
+#para fungos
+estatisticas_fun = cbind(descrever_phyloseqs_lista(fun_split),
+                         descrever_phyloseqs_lista(pseq_core[c("floor_fun","wall_fun","scalp_fun")])
+                         )
+names(estatisticas_bac) = c("Floor","Scalp", "Wall","Floor (Core)", "Wall (Core)", "Scalp (Core)")
+print(estatisticas_bac)
+print(estatisticas_fun)
+```
+
+Podemos ver que para bactérias, a média é bem menor que o valor máximo, indicando que há muitas bactérias com poucas reads, isto é especialmente verdadeiro para o couro cabeludo, em que a média é bem maior que a mediana. 
+
+Para fungos, vemos o mesmo padrão, provavelmente por Malassezia dominar a proporção de reads.
+## Exportação dos dados
+```{r}
+#salvar como objeto R na pasta de dados
+save(pseq_core, file =  "data/processed/pseq_core.rds")
+```
+
+

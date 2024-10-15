@@ -1,0 +1,103 @@
+---
+title: "Functional Prediction"
+output: html_notebook
+---
+```{r setup}
+#setar diretório de trabalho para a pasta do projeto
+knitr::opts_knit$set(root.dir = '/home/gustavo/Projeto')
+```
+
+### Importação de bibliotecas, funções e dados
+```{r}
+library(Tax4Fun2) 
+library(readr)
+library(tidyverse)
+library(phyloseq)
+source("source/clean_bacteria.R", local = TRUE)
+load("data/raw/phyloseqbacteria.rds")
+```
+
+
+### Limpeza e rarificação do dado antes da predição
+```{r}
+bac_clean = clean_bacteria(bacteria)
+bac_clean <- merge_phyloseq(bac_clean$Floor, bac_clean$Wall, bac_clean$Scalp)
+```
+
+### Salvar e processar OTU Table
+```{r}
+write.table(bac_clean@otu_table, file = "/home/gustavo/Projeto/data/raw/Tax4Fun2_otutable.txt", sep = "\t", quote = F, row.names = T)
+```
+
+O modelo precisa esar no formato certo, na importação do R o nome do indíce de linhas desaparece, por isso estou adicionando com bash
+```{bash}
+sed -i "1s/^/ID\t/" data/raw/Tax4Fun2_otutable.txt
+```
+
+### Predição funcional
+
+O método usado foi o Tax4Fun2, que compara as sequencias representativas com o blast, busca o genoma de referência no banco Ref100NR do NCBI, e depois compara com o Kegg para ver as vias presentes
+```{r}
+#Rodar o blast das sequencias representativas com a base Ref100NR
+runRefBlast(path_to_otus="data/raw/bacteria_otus_representatives.fa",
+            path_to_reference_data = "data/reference/Tax4Fun2_ReferenceData_v2/",
+            path_to_temp_folder = "data/processed/Tax4Fun2_Results/", 
+            database_mode = "Ref100NR",
+            use_force = T,
+            num_threads = 6)
+```
+
+Após o blast, o algoritmo pondera a presença das enzimas com a quantidade de reads de bacteria, e depois vê se estas enzimas formam vias (presentes no Kegg)
+
+```{r}
+#gerar predição funcional, comparando quantidade das OTUs com o resultado do blast, tendo que ser 97% parecido para entrar
+makeFunctionalPrediction(path_to_otu_table = "data/raw/Tax4Fun2_otutable.txt",
+                         path_to_reference_data = "data/reference/Tax4Fun2_ReferenceData_v2/",
+                         path_to_temp_folder = "data/processed/Tax4Fun2_Results/",
+                         database_mode = "Ref100NR", 
+                         normalize_by_copy_number = TRUE, 
+                         min_identity_to_reference = 0.97, 
+                         normalize_pathways = FALSE) 
+```
+
+
+### Exportar resultado
+
+O dado funcional se assemelha com os dados de taxonomia, então exportar como phyloseq é vantajoso pela facilidade de manipulação mais para frente
+```{r}
+ ##importando os dados da predição funcional
+pathway_prediction <- read_delim("data/processed/Tax4Fun2_Results/pathway_prediction.txt", 
+     "\t", escape_double = FALSE, trim_ws = TRUE)
+
+#transforma em data frame
+path <- as.data.frame(pathway_prediction) 
+
+#separa a parte com a anotação das vias
+tax <- path[, c("level1","level2","level3")] 
+#  Combinando os rownames do que será a tax table e otu table do phyloseq   
+rownames(tax) <- path$pathway            
+rownames(path) <- path$pathway
+ # removendo da otu table a anotação das vias
+path$level1 <- NULL      
+path$level2 <- NULL
+path$level3 <- NULL
+path$pathway <- NULL
+
+#definindo otu_table (dados funcionais)
+otu <- otu_table((as.matrix(path)), taxa_are_rows = TRUE)
+
+#definindo tax_table (anotação das vias)
+tax <- tax_table((as.matrix(tax)))
+
+ # criando phyloseq com as tabelas criadas
+pseq_metab <- phyloseq(otu, tax)
+
+#Adicionando os metadados (iguais do phyloseq bacteriano)
+pseq_metab@sam_data <- bac_clean@sam_data 
+
+#Exportando para análise posterior 
+save(pseq_metab, file = "data/processed/phyloseq_funcional.rds")
+```
+
+
+

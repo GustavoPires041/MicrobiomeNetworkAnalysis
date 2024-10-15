@@ -1,0 +1,504 @@
+---
+title: "Untitled"
+author: "Gustavo Pires Matheus"
+date: "02/03/2022"
+output: html_document
+---
+```{r}
+library(microbiome)
+library(MicrobiotaProcess)
+library(phyloseq)
+library(SpiecEasi)      
+library(igraph)
+library(tidyverse)
+source(file = "code/clean_.R", local = TRUE)
+load("phyloseqbacteria.rds")
+load("phyloseqfungo.rds")
+
+# limpeza do phyloseq
+clean <- function(full_ps){
+  library(phyloseq)
+  library(Biostrings)
+  colnames(tax_table(full_ps))<-c("Domain","Phylum","Class","Order","Family","Genus","Species") # corrige nome dos taxons
+  tax_table(full_ps)[, colnames(tax_table(full_ps))] <- gsub(tax_table(full_ps)[, colnames(tax_table(full_ps))], pattern = "D_[0-7]__", replacement = "") #limpa a tabela dos préfixos
+  full_ps <- subset_taxa(full_ps, Family != "Mitochondria" & Order != "Chloroplast") # remove mitocondrias e croroplastos da tabela
+  full_ps@sam_data$SampleType_Sites <- gsub("_Healthy","", full_ps@sam_data$SampleType_Sites) # corrige a coluna sites, removendo a informação de saude (redundante)
+  full_ps@sam_data$SampleType_Sites <- gsub("_SD","" ,full_ps@sam_data$SampleType_Sites)
+  full_ps@sam_data$SampleReads <- sample_sums(full_ps) # cria coluna de numero de reads nos metadados
+  set.seed(1412)
+  cov <- metagMisc::phyloseq_coverage(full_ps)
+  meta <- full_ps@sam_data
+  meta$SampleID <- rownames(meta)
+  a <- merge(data.frame(meta), as.data.frame(cov), by = "SampleID")
+  rownames(a) <- a$SampleID
+  a$SampleID <- NULL
+  a$SampleCoverage.x <- NULL
+  a$SampleCoverage.y <- NULL
+  full_ps@sam_data <- sample_data(a)
+  if(full_ps@tax_table[1,1] == "Bacteria"){ ##Gambiarra pq não ta dando pra colocar um argumento pra ser o numero de reads
+    full_ps.f <- subset_samples(full_ps, SampleReads > 1000 & SampleCoverage > 0.97)
+  }
+  if(full_ps@tax_table[1,1] != "Bacteria"){
+    for(i in c("k__","p__","c__","o__","f__","g__","s__")){
+      tax_table(full_ps)[, colnames(tax_table(full_ps))] <- gsub(tax_table(full_ps)[, colnames(tax_table(full_ps))], pattern = i, replacement = "")
+    }
+    full_ps <-subset_taxa(full_ps, full_ps@tax_table[,1] != "No blast hit" )
+    full_ps.f <- subset_samples(full_ps, SampleReads > 2500 & SampleCoverage > 0.97)
+  }
+  split1 <- metagMisc::phyloseq_sep_variable(full_ps.f, "SampleType_Sites")
+  split2 <- metagMisc::phyloseq_sep_variable(full_ps.f, "SampleType_Surface_Object")
+  ps.split <- split1[c("Floor","Wall", "Scalp", "Hand")]
+  ps.split$Object <- split2$Object
+  
+  return (ps.split)
+}
+
+
+bac.split<- clean(bacteria)
+fun.split<- clean(fungi)
+
+##Selecao do core
+core = function(phyl, corte_prev =0, corte_abund){
+  ##cria o core e mostra a tabela com as especies
+  phyl_compositional <- microbiome::transform(phyl, "compositional") 
+  core.taxa <- core_members(phyl_compositional, detection = corte_abund, prevalence = corte_prev)
+  taxonomy <- as.data.frame(tax_table(phyl_compositional))
+  core_taxa_id <- subset(taxonomy, rownames(taxonomy) %in% core.taxa)
+  ##cria um phyloseq com o core e retorna para a função
+  print(phyl)
+  phyl_core = subset_taxa(phyl, taxa_names(phyl) %in% core.taxa) 
+  return(phyl_core)
+}
+core.floor.bac <- core(phyl = bac.split$Floor, corte_abund = 0.01)
+core.wall.bac <- core(bac.split$Wall, corte_abund = 0.1)
+core.scalp.bac <- core(bac.split$Scalp, corte_abund = 0.01)
+core.floor.fun <- core(fun.split$Floor, corte_abund = 0.01)
+core.wall.fun <- core(fun.split$Wall, corte_abund = 0.01)
+core.scalp.fun <- core(fun.split$Scalp, corte_abund = 0.01)
+
+
+save(bac.split, file =  "bacsplit.rds")
+save(fun.split, file = "funsplit.rds")
+save(core.floor.bac,file = "corefloorbac.rds")
+save(core.wall.bac, file= "corewallbac.rds")
+save(core.scalp.bac,file = "corescalpbac.rds")
+save(core.floor.fun, file =  "corefloorfun.rds")
+save(core.wall.fun,file = "corewallfun.rds")
+save(core.scalp.fun,file =  "corescalpfun.rds")
+
+load("Objects/corefloorbac.rds")
+load("Objects/corewallbac.rds")
+load("Objects/corescalpbac.rds")
+load("Objects/corefloorfun.rds")
+load("Objects/corewallfun.rds")
+load("Objects/corescalpfun.rds")
+load("Objects/bacsplit.rds")
+load("Objects/funsplit.rds")
+```
+
+
+```{r}
+
+equal_sample_number <- function(phyloseq_bac, phyloseq_fun, category = "HouseStatus", type){
+    
+          phyloseq_fun <- subset_samples(phyloseq_fun, sample_names(phyloseq_fun) %in% sample_names(phyloseq_bac))  
+          phyloseq_bac <- subset_samples(phyloseq_bac, sample_names(phyloseq_bac) %in% sample_names(phyloseq_fun))
+          phyloseq_bac_split<- metagMisc::phyloseq_sep_variable(phyloseq_bac, category)
+          phyloseq_fun_split <- metagMisc::phyloseq_sep_variable(phyloseq_fun, category)
+          print(nsamples(phyloseq_bac))
+          print(nsamples(phyloseq_fun))
+          if(type == "bacteria")
+              return(phyloseq_bac_split)
+         else if(type == "fungi")
+           return(phyloseq_fun_split)  
+    
+    
+}
+floor.bac <- equal_sample_number(core.floor.bac, core.floor.fun, category = "HouseStatus", type = "bacteria")
+floor.fun <- equal_sample_number(core.floor.bac, core.floor.fun, category = "HouseStatus", type = "fungi")
+wall.bac <- equal_sample_number(core.wall.bac, core.wall.fun, category = "HouseStatus", type = "bacteria")
+wall.fun <- equal_sample_number(core.wall.bac, core.wall.fun, category = "HouseStatus", type = "fungi")
+scalp.bac <- equal_sample_number(core.scalp.bac, core.scalp.fun, category = "HouseStatus", type = "bacteria")
+scalp.fun <- equal_sample_number(core.scalp.bac, core.scalp.fun, category = "HouseStatus", type = "fungi")
+
+save(floor.bac, file = "floorbac.rds")
+save(floor.fun, file = "floorfun.rds")
+save(wall.bac, file = "wallbac.rds")
+save(wall.fun, file = "wallfun.rds")
+save(scalp.bac, file = "scalpbac.rds")
+save(scalp.fun, file = "scalpfun.rds")
+
+load(file = "Objects/floorbac.rds")
+load(file = "Objects/floorfun.rds")
+load(file = "Objects/wallbac.rds")
+load(file = "Objects/wallfun.rds")
+load(file = "Objects/scalpbac.rds")
+load(file = "Objects/scalpfun.rds")
+
+
+```
+
+```{r}
+##Construção de Redes
+
+so.floor.h <- spiec.easi(list(floor.bac$Healthy, floor.fun$Healthy), method='mb', nlambda=60,
+                         lambda.min.ratio=1e-2, pulsar.params = list(thresh = 0.05, rep.num = 100, ncores = 4))
+save(so.floor.h, file = "sofloorh.rds")
+so.floor.sd <- spiec.easi(list(floor.bac$SD, floor.fun$SD), method='mb', nlambda=60,
+                          lambda.min.ratio=1e-2, pulsar.params = list(thresh = 0.05, rep.num = 100, ncores = 4))
+save(so.floor.sd, file = "sofloorsd.rds")
+so.wall.h <- spiec.easi(list(wall.bac$Healthy, wall.fun$Healthy), method='mb', nlambda=60,
+                         lambda.min.ratio=1e-2, pulsar.params = list(thresh = 0.05, rep.num = 100, ncores = 4))
+save(so.wall.h, file = "sowallh.rds")
+so.wall.sd <- spiec.easi(list(wall.bac$SD, wall.fun$SD), method='mb', nlambda=60,
+                          lambda.min.ratio=1e-2, pulsar.params = list(thresh = 0.05, rep.num = 100, ncores = 4))
+save(so.wall.sd, file = "sowallsd.rds")
+so.scalp.h <- spiec.easi(list(scalp.bac$Healthy, scalp.fun$Healthy), method='mb', nlambda=60,
+                         lambda.min.ratio=1e-2, pulsar.params = list(thresh = 0.05, rep.num = 100, ncores = 4))
+save(so.scalp.h, file = "soscalph.rds")
+so.scalp.sd <- spiec.easi(list(scalp.bac$SD, scalp.fun$SD), method='mb', nlambda=60,
+                          lambda.min.ratio=1e-2, pulsar.params = list(thresh = 0.05, rep.num = 100, ncores = 4))
+save(so.scalp.sd, file = "soscalpsd.rds")
+
+load(file = "Objects/sofloorh.rds")
+load(file = "Objects/sofloorsd.rds")
+load(file = "Objects/sowallh.rds")
+load(file = "Objects/sowallsd.rds")
+load(file = "Objects/soscalph.rds")
+load(file = "Objects/soscalpsd.rds")
+```
+
+
+```{r}
+transform_and_export_network <- function(phyloseq_bact, phyloseq_fung, spiec_out, module = F, cluster.rede){
+    merged_phyloseq <- merge_phyloseq(phyloseq_bact, phyloseq_fung)
+    otu.c <- t(otu_table(merged_phyloseq)@.Data)
+    tax.c <- as.data.frame(tax_table(merged_phyloseq)@.Data)
+    tax.c$Abundance <- taxa_sums(merged_phyloseq)
+    tax.c$Abundance <- 100* log2(tax.c$Abundance)
+    tax.c[,6] <- gsub(" ","_", tax.c[,6])
+    n.c <- symBeta(getOptBeta(spiec_out))
+    colnames(n.c) <- rownames(n.c) <- colnames(otu.c)
+    if(module){
+         rownames(cluster.rede) = cluster.rede$temp
+         cluster.rede$temp = NULL
+         tax.c = cbind(tax.c, cluster.rede)
+    }
+    net <- graph.adjacency(n.c, mode='undirected', add.rownames = TRUE, weighted = TRUE)
+    write.table(tax.c,file="Redes_remade1/taxonomia.txt",sep="\t", quote=FALSE)
+    write.graph(net,file="Redes_remade1/rede.ncol.txt",format="ncol")
+    net_genus <- net
+    V(net_genus)$name <- tax.c$Genus
+    write.graph(net_genus,file="Redes_remade1/rede_genero.ncol.txt",format="ncol")
+    return(net)
+}
+
+net.floor.healthy <- transform_and_export_network(phyloseq_bact = floor.bac$Healthy , phyloseq_fung = floor.fun$Healthy, spiec_out = so.floor.h)
+net.floor.sd <- transform_and_export_network(phyloseq_bact = floor.bac$SD , phyloseq_fung = floor.fun$SD, spiec_out = so.floor.sd)
+net.wall.healthy <- transform_and_export_network(phyloseq_bact = wall.bac$Healthy , phyloseq_fung = wall.fun$Healthy, spiec_out = so.wall.h)
+net.wall.sd <- transform_and_export_network(phyloseq_bact = wall.bac$SD , phyloseq_fung = wall.fun$SD, spiec_out = so.wall.sd)
+net.scalp.healthy <- transform_and_export_network(phyloseq_bact = scalp.bac$Healthy , phyloseq_fung = scalp.fun$Healthy, spiec_out = so.scalp.h)
+net.scalp.sd <- transform_and_export_network(phyloseq_bact = scalp.bac$SD , phyloseq_fung = scalp.fun$SD, spiec_out = so.scalp.sd)
+setwd("~/Vídeos")
+```
+
+```{bash}
+for file in Redes_remade1/redes/*; do 
+    # Verifica se o arquivo não começa com "Source Target Weight" e adiciona se não tiver
+    if ! head -n 1 $file | grep -q "^Source Target Weight"; then
+        sed -i '1s/^/Source Target Weight\n/' $file
+    fi
+done
+
+for file in Redes_remade1/Metadados_redes/*; do
+    # Verifica se o arquivo não começa com "OTU" e adiciona se não tiver
+    if ! head -n 1 $file | grep -q "^OTU"; then
+        sed -i '1s/^/OTU\t/' $file
+    fi
+done
+
+```
+
+```{r}
+library(readr)
+library(plotly)
+Dados_redes <- read_csv("Redes_remade1/Dados_redes.csv")
+dadosPiso <- Dados_redes[c(1:18),]
+dadosParede <- Dados_redes[c(19:36),]
+dadosScalp <- Dados_redes[c(37:54),]
+#dadosParede$Valor[c(6,15)]<- dadosParede$Valor[c(6,15)] + 1 
+#dadosScalp$Valor[c(6,15)]<- dadosScalp$Valor[c(6,15)] + 1 
+```
+
+```{r}
+bplot <- function(dado){
+dado$Valor <- dado$Valor/ dado$Valor[c(1:9)] * 100
+dado$Local <- factor(dado$Local)
+bar <- dado %>% 
+    plot_ly(x = ~Analise, 
+             y = ~Valor, 
+             color = ~Local, colors = c("forestgreen", "red"), alpha = 1) %>%
+     layout(xaxis = list(title = NA, size=30),
+            yaxis = list(title = "(%)", titlefont = list(size=16)), legend = list(size = 66)) 
+ return (bar)
+}
+ barra.parede <- bplot(dadosParede)
+ barra.piso <- bplot(dadosPiso)
+ barra.scalp <- bplot(dadosScalp)
+```
+
+```{r}
+set.seed(1412)
+##Zi pi plot
+Zipi_attribute <- function(G1){
+    E(G1)$weight <- abs(E(G1)$weight)  # Define os pesos das arestas como valores absolutos para garantir positividade
+    seqdeg=degree(G1)  # Calcula o grau de cada nó no grafo
+    Nnodes=length(seqdeg)  # Obtém o número de nós no grafo
+    Z=seqdeg  # Inicializa um vetor Z com o grau dos nós
+    Z[]=0  # Define todos os elementos do vetor Z como zero
+    P=Z  # Cria um vetor P com os mesmos valores que Z
+    Wtc=cluster_louvain(G1)  # Realiza a detecção de comunidades usando o algoritmo Louvain
+    Membership=membership(Wtc)  # Obtém os IDs das comunidades de cada nó do grafo
+    
+    Seq=seq(1:Nnodes)  # Cria uma sequência de números de 1 até o número de nós no grafo
+    
+    for(i in 1:Nnodes){  # Loop pelos nós do grafo
+        L=Membership==Membership[i]  # Verifica a pertença do nó à sua comunidade
+        neighbs=neighbors(G1,i)  # Obtém os vizinhos do nó atual
+        
+        Kis=sum(L[neighbs])  # Calcula a soma da pertença dos vizinhos à mesma comunidade
+        SUM=0
+        SUMsq=0
+        SUMP=0
+        Miv=Seq[L]  # Obtém a sequência de nós pertencentes à mesma comunidade
+        
+        for(j in 1:sum(L)){  # Loop pelos nós da mesma comunidade
+            neighbsj=neighbors(G1,Miv[j])  # Obtém os vizinhos do nó da comunidade
+            Kjs=sum(L[neighbsj])  # Calcula a soma da pertença dos vizinhos à mesma comunidade
+            SUM=SUM+Kjs  # Soma as pertenças dos vizinhos
+            SUMsq=SUMsq+Kjs^2  # Soma os quadrados das pertenças dos vizinhos
+        }
+        
+        Z[i]=(Kis-SUM/sum(L))/sqrt(SUMsq/sum(L)-(SUM/sum(L))^2)  # Calcula o valor Zi para o nó atual
+        if(Kis-SUM/sum(L)==0){Z[i]=0}  # Define Zi como zero se a diferença for zero
+        
+        for(k in 1:max(Membership)){  # Loop para calcular P
+            Lp=Membership==k  # Verifica a pertença do nó à comunidade k
+            Kisp=sum(Lp[neighbs])  # Calcula a soma da pertença dos vizinhos à comunidade k
+            SUMP=SUMP+(Kisp/seqdeg[i])^2  # Soma as contribuições dos vizinhos à métrica P
+        }
+        
+        P[i]=1-SUMP  # Calcula a métrica P para o nó atual
+    }
+    
+    attribute_node=cbind(degree=seqdeg,module=Membership,Pi=P,Zi=Z)  # Combina os vetores em uma matriz
+    return(attribute_node)  # Retorna a matriz com os atributos calculados para os nós
+}
+Zipi_plot = function(net.h, net.sd, mode = "plot"){
+    atributo.h = data.frame(Zipi_attribute(net.h))
+    atributo.sd = data.frame(Zipi_attribute(net.sd))
+    atributo_hsd = rbind(atributo.h, atributo.sd)
+    atributo_hsd$Status = atributo_hsd$degree 
+    atributo_hsd$Status[1:nrow(atributo.h)] = "Healthy"
+    atributo_hsd$Status[nrow(atributo.h):(nrow(atributo.h) + nrow(atributo.sd))] = "Dandruff"
+    if(mode == "plot"){
+        zipi <- ggplot(as.data.frame(atributo_hsd), aes(x = Pi, y = Zi, colour = Status)) + geom_point(size = 3) + ylab("Within Module Connectivity (Zi)") + xlab("Among Module Connectivity (Pi)")
+        zipi <- zipi + geom_hline(yintercept = 2.5)  
+        zipi <- zipi + geom_vline(xintercept = 0.62) 
+        zipi <- zipi + scale_colour_manual(values = c("red", "forestgreen"))
+        zipi = zipi + theme_classic()
+    
+    atributo_hsd = atributo_hsd[which((atributo_hsd$Zi >= 2.5)),]
+    return(list(zipi = zipi, atributos = atributo_hsd))
+    }
+}
+#hub.members.wall = zipi_hub_members(zipi.wall$atributos)
+#hub.members.floor = zipi_hub_members(zipi.floor$atributos)
+#hub.members.scalp = zipi_hub_members(zipi.scalp$atributos)
+zipi.wall <- Zipi_plot(net.wall.healthy, net.wall.sd)
+zipi.floor <- Zipi_plot(net.floor.healthy, net.floor.sd)
+zipi.scalp <- Zipi_plot(net.scalp.healthy, net.scalp.sd)
+#write.csv(attribute_node,"attribute_node.csv",quote=F)
+```
+
+```{r}
+#Visualização dos modulos
+salvar_atributos = function(net, bac, fun, status)  {
+    atributo = data.frame(Zipi_attribute(net))
+    merged_phyloseq = merge_phyloseq(bac,fun)
+    att <- cbind(atributo,merged_phyloseq@tax_table)
+    write.table(att, file = "atributos_scalp_h.csv",sep = ",", quote = F)
+}
+#salvar_atributos(net.floor.sd, floor.bac$SD,floor.fun$SD)
+#salvar_atributos(net.wall.sd, wall.bac$SD,wall.fun$SD)
+#salvar_atributos(net.wall.healthy, wall.bac$Healthy,wall.fun$Healthy)
+#salvar_atributos(net.scalp.sd, scalp.bac$SD,scalp.fun$SD)
+salvar_atributos(net.scalp.healthy, scalp.bac$Healthy,scalp.fun$Healthy)
+```
+
+
+```{r}
+#Modulos
+set.seed(1412)
+salvar_modulos <- function(net, nome = "", nome2 = "", summary = T){
+    E(net)$weight <- abs(E(net)$weight)
+    wt <- cluster_louvain(net)
+    print(modularity(wt))
+    temp <- V(net)$name
+    temp <- as.data.frame(temp)
+    temp$louvain <- membership(wt)
+    
+    write.table(temp, nome, sep = ",", quote = F, row.names =  F)
+    if(summary == F){
+      return(temp)
+    }
+    ## Summary
+    V(net)$louvain <- temp$louvain
+    length(unique(temp$louvain))
+    summary_modules <- data.frame(table(temp$louvain))
+    colnames(summary_modules) <-
+    c("Var1", "Freq")
+    summary_modules
+    write.table(summary_modules, nome2, sep = ",", quote = F, row.names =  F)
+    return(summary_modules)
+    
+}
+info.cluster.floor.h = salvar_modulos(net.floor.healthy, "ClusterFloorHealthy", "summaryFloorHealthy", summary = F)
+info.cluster.floor.sd = salvar_modulos(net.floor.sd, "ClusterFloorSD", "summaryFloorSD", summary = F)
+info.cluster.wall.h = salvar_modulos(net.wall.healthy, "ClusterWallHealthy", "summaryWallHealthy", summary = F)
+info.cluster.wall.sd = salvar_modulos(net.wall.sd, "ClusterWallSD", "summaryWallSD", summary = F)
+info.cluster.scalp.h= salvar_modulos(net.scalp.healthy, "ClusterScalpHealthy", "summaryScalpHealthy", summary = F)
+info.cluster.scalp.sd = salvar_modulos(net.scalp.sd, "ClusterScalpSD", "summaryScalpSD", summary = F)
+
+summary_modules.floor.sd = salvar_modulos(net.floor.sd, "ClusterFloorSD", "summaryFloorSD")
+summary_modules.wall.h = salvar_modulos(net.wall.healthy, "ClusterWallHealthy", "summaryWallHealthy")
+summary_modules.wall.sd = salvar_modulos(net.wall.sd, "ClusterWallSD", "summaryWallSD")
+summary_modules.scalp.h = salvar_modulos(net.scalp.healthy, "ClusterScalpHealthy", "summaryScalpHealthy")
+summary_modules.scalp.sd = salvar_modulos(net.scalp.sd, "ClusterScalpSD", "summaryScalpSD")
+```
+
+
+
+```{r}
+#save network with cluster membership
+export_network <- function(phyloseq_bact, phyloseq_fung, spiec_out, cluster.rede){
+    merged_phyloseq <- merge_phyloseq(phyloseq_bact, phyloseq_fung)
+    otu.c <- t(otu_table(merged_phyloseq)@.Data)
+    tax.c <- as.data.frame(tax_table(merged_phyloseq)@.Data)
+    tax.c$Abundance <- taxa_sums(merged_phyloseq)
+    tax.c$Abundance <- 100* log2(tax.c$Abundance)
+    tax.c[,6] <- gsub(" ","_", tax.c[,6])
+    n.c <- symBeta(getOptBeta(spiec_out))
+    colnames(n.c) <- rownames(n.c) <- colnames(otu.c)
+    rownames(cluster.rede) = cluster.rede$temp
+    cluster.rede$temp = NULL
+    tax.c = cbind(tax.c, cluster.rede)
+    net <- graph.adjacency(n.c, mode='undirected', add.rownames = TRUE, weighted = TRUE)
+    write.table(tax.c,file="Redes_remade1/taxonomia.txt",sep="\t", quote=FALSE)
+    write.graph(net,file="Redes_remade1/rede.ncol.txt",format="ncol")
+    net_genus <- net
+    V(net_genus)$name <- tax.c$Genus
+    write.graph(net_genus,file="Redes_remade1/rede_genero.ncol.txt",format="ncol")
+    return(net)
+}
+
+export_network(phyloseq_bact = floor.bac$Healthy , phyloseq_fung = floor.fun$Healthy, spiec_out = so.floor.h, cluster.rede = info.cluster.floor.h )
+export_network(phyloseq_bact = floor.bac$SD , phyloseq_fung = floor.fun$SD, spiec_out = so.floor.sd, cluster.rede = info.cluster.floor.sd)
+export_network(phyloseq_bact = wall.bac$Healthy , phyloseq_fung = wall.fun$Healthy, spiec_out = so.wall.h, cluster.rede = info.cluster.wall.h)
+export_network(phyloseq_bact = wall.bac$SD , phyloseq_fung = wall.fun$SD, spiec_out = so.wall.sd, cluster.rede = info.cluster.wall.sd)
+export_network(phyloseq_bact = scalp.bac$Healthy , phyloseq_fung = scalp.fun$Healthy, spiec_out = so.scalp.h, cluster.rede = info.cluster.scalp.h)
+export_network(phyloseq_bact = scalp.bac$SD , phyloseq_fung = scalp.fun$SD, spiec_out = so.scalp.sd, cluster.rede = info.cluster.scalp.sd)
+
+```
+
+
+
+```{r}
+#importar predição funcional dos modulos
+set.seed(1412)
+library(vegan)
+load("~/Vídeos/phyloseq_funcional.rds")
+info.cluster.scalp.h= salvar_modulos(net.scalp.healthy, "ClusterScalpHealthy", "summaryScalpHealthy", summary = F)
+### Predição funcional
+     #Seleção de vias de interesse para cada condição
+        #Será testado todas as vias ou apenas as diferencialmente abundantes??
+
+### Selecionar otus de cada modulo
+#adicionar informação dos módulos nos metadados do phyloseq bacteria
+info <- info.cluster.scalp.sd
+rownames(info) = info$temp
+info$temp = NULL
+temp = merge_phyloseq(scalp.bac$SD, scalp.fun$SD)
+b <- table(info)
+b <- data.frame(b)
+b = b[b$Freq >= 5,]
+a <- cbind(temp@tax_table, info)
+c <- a[which(a$louvain %in% b$louvain),]
+temp@tax_table = tax_table(as.matrix(c))
+temp@tax_table[,8] = gsub(" ","",temp@tax_table[,8])
+
+
+cont = 1
+#eliminar modulos com menos de 5 membros
+matrix1 = matrix(ncol = 6, nrow = 13)
+df.resultado = data.frame(matrix1)
+colnames(df.resultado) = c("Modulo", "Via level 2", "Via level 3", "Via level 1", "R", "p-valor")
+
+
+#teste mantel para todos os modulos de um ambiente
+for(j in 1:max(c$louvain))
+  {
+  if(j %in% c$louvain){
+    b = subset_taxa(temp, louvain == j) #objeto só com taxa do modulo 1
+    
+    #agora preparar o phyloseq funcional para apenas amostras de piso
+    funpred.phyl.floor = subset_samples(funpred.phyl, sample_names(funpred.phyl) %in% sample_names(temp))
+        ### teste de Mantel
+    funpred.phyl.floor = subset_taxa(funpred.phyl.floor, taxa_sums(funpred.phyl.floor@otu_table) > 0)
+    abund.clr = microbiome::transform(b, "clr")
+    dist.abund = vegdist(t(abund.clr@otu_table), method = "euclidean")
+    print("Aqui começa outro modulo")
+    for(i in 1:ntaxa(funpred.phyl.floor))
+      {
+        dist.function = dist(t(funpred.phyl.floor@otu_table[i,]), method = "euclidean")
+        res.mantel.temp = mantel(dist.abund,dist.function, method = "spearman", permutations = 999, na.rm = TRUE) 
+        if(res.mantel.temp$signif < 0.05 && abs(res.mantel.temp$statistic) > 0.5 ){
+          df.resultado$`p-valor`[cont] = res.mantel.temp$signif
+          df.resultado$R[cont] = res.mantel.temp$statistic
+          df.resultado$Modulo[cont] = j
+          df.resultado$`Via level 2`[cont] = funpred.phyl.floor@tax_table[i,"level2"]
+          df.resultado$`Via level 3`[cont] = funpred.phyl.floor@tax_table[i,"level1"]
+          df.resultado$`Via level 1`[cont] = funpred.phyl.floor@tax_table[i,"level3"]
+          print(res.mantel.temp$signif)
+          print(res.mantel.temp$statistic)
+          cont = cont+1
+        }
+    }
+  }
+}
+print(cont)
+
+```
+
+```{r}
+ expressionInput <- c(`Floor Healthy` = 122, `Floor SD` = 47, `Wall Healthy` = 27, `Wall SD` = 138, `Scalp Healthy` = 243, `Scalp SD` = 9, `Wall SD&Floor SD`= 26, `Wall Healthy&Floor Healthy` = 10,`Floor Healthy&Scalp Healthy` =91, `Floor SD&Scalp SD` = 1, `Wall Healthy&Scalp Healthy`=22, `Wall SD&Scalp SD` = 3, `Wall Healthy&Wall SD` =7,`Floor SD&Floor Healthy` = 16, `Scalp SD&Scalp Healthy` = 6)
+ upset_plot <- upset(fromExpression(expressionInput),keep.order = F,group.by = "sets", nsets = 6)
+ upset_plot
+```
+
+```{r}
+modulos <- function(phyloseq_bact, phyloseq_fung, spiec_out, cluster.rede){
+    merged_phyloseq <- merge_phyloseq(phyloseq_bact, phyloseq_fung)
+    otu.c <- t(otu_table(merged_phyloseq)@.Data)
+    tax.c <- as.data.frame(tax_table(merged_phyloseq)@.Data)
+    tax.c$Abundance <- taxa_sums(merged_phyloseq)
+    tax.c$Abundance <- 100* log2(tax.c$Abundance)
+    tax.c[,6] <- gsub(" ","_", tax.c[,6])
+    rownames(cluster.rede) = cluster.rede$temp
+    cluster.rede$temp = NULL
+    tax.c = cbind(tax.c, cluster.rede)
+    return(tax.c)
+}
+taxa.modulos.floor.h <- modulos(phyloseq_bact = floor.bac$Healthy , phyloseq_fung = floor.fun$Healthy, spiec_out = so.floor.h, cluster.rede = info.cluster.floor.h )
+taxa.modulos.scalp.h <- modulos(phyloseq_bact = scalp.bac$Healthy , phyloseq_fung = scalp.fun$Healthy, spiec_out = so.floor.h, cluster.rede = info.cluster.scalp.h )
+```

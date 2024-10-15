@@ -1,0 +1,198 @@
+---
+title: "Network Generation"
+output: html_notebook
+---
+
+```{r setup}
+#setar diretório de trabalho para a pasta do projeto
+knitr::opts_knit$set(root.dir = '/home/gustavo/Projeto')
+```
+
+
+```{r}
+#importação de bibliotecas
+library(phyloseq)
+library(tidyverse)
+library(SpiecEasi)
+library(igraph)
+library(MatrixExtra)
+load(file =  "data/processed/pseq_core.rds")
+```
+
+### Equalizar número de amostras para passar para o algoritmo de rede
+
+```{r}
+source(file = "source/equal_sample_number.R", local = TRUE)
+floor = equal_sample_number(pseq_core$floor_bac, pseq_core$floor_fun)
+wall = equal_sample_number(pseq_core$wall_bac, pseq_core$wall_fun)
+scalp = equal_sample_number(pseq_core$scalp_bac, pseq_core$scalp_fun)
+```
+
+### Aplicar SPIEC-EASI para gerar as redes
+
+##### Piso:
+
+```{r}
+##Construção de Redes
+# Floor Healthy Network
+floor_healthy_net <- spiec.easi(list(floor$bac_healthy,floor$fun_healthy),
+                                method='mb', nlambda=60,
+                                lambda.min.ratio=1e-2,
+                                pulsar.params = list(thresh = 0.05, rep.num = 100, ncores = 4, seed = 1412))
+# Floor SD Network
+floor_sd_net <- spiec.easi(list(floor$bac_sd, floor$fun_sd),
+                           method='mb', nlambda=60,
+                           lambda.min.ratio=1e-2,
+                           pulsar.params = list(thresh = 0.05, rep.num = 100, ncores = 4, seed = 1412))
+```
+
+#### Parede:
+
+```{r}
+#Wall Healthy Network
+wall_healthy_net <- spiec.easi(list(wall$bac_healthy, wall$fun_healthy), method='mb', nlambda=60,
+                         lambda.min.ratio=1e-2, pulsar.params = list(thresh = 0.05, rep.num = 100, ncores = 4, seed = 1412))
+# Wall SD Network
+wall_sd_net <- spiec.easi(list(wall$bac_sd, wall$fun_sd), method='mb', nlambda=60,
+                          lambda.min.ratio=1e-2, pulsar.params = list(thresh = 0.05, rep.num = 100, ncores = 4, seed = 1412))
+```
+
+#### Couro Cabeludo
+
+```{r}
+#scalp Healthy network
+scalp_healthy_net <- spiec.easi(list(scalp$bac_healthy,scalp$fun_healthy),
+                                method='mb', nlambda=60,
+                                lambda.min.ratio=1e-2,
+                                pulsar.params = list(thresh = 0.05, rep.num = 100, ncores = 4, seed = 1412))
+#scalp SD network
+scalp_sd_net <- spiec.easi(list(scalp$bac_sd, scalp$fun_sd),
+                           method='mb', nlambda=60,
+                           lambda.min.ratio=1e-2,
+                           pulsar.params = list(thresh = 0.05, rep.num = 100, ncores = 4, seed = 1412))
+
+```
+    
+### Exportar redes 
+
+```{r}
+networks = list(floor_healthy = floor_healthy_net,
+                floor_sd = floor_sd_net,
+                wall_healthy = wall_healthy_net,
+                wall_sd = wall_sd_net,
+                scalp_healthy = scalp_healthy_net,
+                scalp_sd = scalp_sd_net)
+save(networks, file = "data/processed/networks_spieceasi.rds")
+```
+
+
+Aqui importo novamente para não precisar gerar as redews novamente, o que demoraria muito tempo
+```{r}
+load("data/processed/networks_spieceasi.rds")
+```
+
+## Transformando em objetos igraph e exportando grafos e tabelas
+
+```{r}
+#importando função que vai transformar e exportar as redes
+source(file = "source/transform_and_export_network.R", local = TRUE)
+```
+
+ Esta função pega o peso dos vertices usando a função Symbeta do SPIEC-EASI, atribui o nome das OTUs aos vértices e exporta as relações taxonomicas e a rede para um arquivo na pasta reports. Ela também retorna um objeto igraph, feito com a matriz de adjacencias do SPIEC-EASI, esses objetos serão usados para análises posteriores.
+```{r}
+#rede parede de casas com saudaveis
+net_wall_healthy <- transform_and_export_network(phyloseq_bact =wall$bac_healthy,
+                                                 phyloseq_fung = wall$fun_healthy,
+                                                 spiec_out = networks$wall_healthy,
+                                                 path_net = "reports/spiec_nets/net_wall_healthy.txt",
+                                                 path_tax = "reports/spiec_nets/tax_wall_healthy.txt")
+
+#rede parede de casas com doentes
+net_wall_sd <- transform_and_export_network(phyloseq_bact =wall$bac_sd,
+                                                 phyloseq_fung = wall$fun_sd,
+                                                 spiec_out = networks$wall_sd,
+                                                 path_net = "reports/spiec_nets/net_wall_sd.txt",
+                                                 path_tax = "reports/spiec_nets/tax_wall_sd.txt")
+
+#rede piso de casas com apenas saudáveis
+net_floor_healthy <- transform_and_export_network(phyloseq_bact =floor$bac_healthy,
+                                                 phyloseq_fung = floor$fun_healthy,
+                                                 spiec_out = networks$floor_healthy,
+                                                 path_net = "reports/spiec_nets/net_floor_healthy.txt",
+                                                 path_tax = "reports/spiec_nets/tax_floor_healthy.txt")
+
+#rede piso de casas com doentes
+
+net_floor_sd <- transform_and_export_network(phyloseq_bact =floor$bac_sd,
+                                                 phyloseq_fung = floor$fun_sd,
+                                                 spiec_out = networks$floor_sd,
+                                                 path_net = "reports/spiec_nets/net_floor_sd.txt",
+                                                 path_tax = "reports/spiec_nets/tax_floor_sd.txt")
+
+
+#rede couro cabeludo de pessoas de casas com apenas saudáveis
+
+net_scalp_healthy <- transform_and_export_network(phyloseq_bact =scalp$bac_healthy,
+                                                 phyloseq_fung = scalp$fun_healthy,
+                                                 spiec_out = networks$scalp_healthy,
+                                                 path_net = "reports/spiec_nets/net_scalp_healthy.txt",
+                                                 path_tax = "reports/spiec_nets/tax_scalp_healthy.txt")
+
+#rede couro cabeludo de pessoas de casas com algum doente
+
+net_scalp_sd <- transform_and_export_network(phyloseq_bact =scalp$bac_sd,
+                                                 phyloseq_fung = scalp$fun_sd,
+                                                 spiec_out = networks$scalp_sd,
+                                                 path_net = "reports/spiec_nets/net_scalp_sd.txt",
+                                                 path_tax = "reports/spiec_nets/tax_scalp_sd.txt")
+```
+
+
+
+```{r}
+#criando objeto e exportando
+networks_igraph = list(floor_healthy = net_floor_healthy,
+                floor_sd = net_floor_sd,
+                wall_healthy = net_wall_healthy,
+                wall_sd = net_wall_sd,
+                scalp_healthy = net_scalp_healthy,
+                scalp_sd = net_scalp_sd)
+save(networks_igraph, file = "data/processed/networks_igraph.rds")
+```
+
+ Corrigindo nome dos arquivos, que vem sem informação de coluna quando exporta
+```{bash}
+# Loop através dos arquivos que seguem o padrão "net" no diretório "reports/spiec_nets/"
+for file in reports/spiec_nets/*; do 
+    # Extrai somente o nome do arquivo sem o caminho completo
+    filename=$(basename "$file")
+
+    # Verifica se o nome do arquivo começa com "net" e se a primeira linha não contém "Source Target Weight"
+    if [[ "$filename" == net* ]] && ! head -n 1 "$file" | grep -q "^Source Target Weight"; then
+        # Se a condição acima for verdadeira, adiciona "Source Target Weight" como a primeira linha do arquivo
+        sed -i '1s/^/Source Target Weight\n/' "$file"
+    fi
+done
+
+# Loop através dos arquivos que seguem o padrão "tax" no diretório "reports/spiec_nets/"
+for file in reports/spiec_nets/*; do 
+    # Extrai somente o nome do arquivo sem o caminho completo
+    filename=$(basename "$file")
+
+    # Verifica se o nome do arquivo começa com "tax" e se a primeira linha não contém "OTU"
+    if [[ "$filename" == tax* ]] && ! head -n 1 "$file" | grep -q "^OTU"; then
+        # Se a condição acima for verdadeira, adiciona "OTU\t" como a primeira linha do arquivo
+        sed -i '1s/^/OTU\t/' "$file"
+    fi
+done
+
+
+```
+
+
+
+
+
+
+
+
