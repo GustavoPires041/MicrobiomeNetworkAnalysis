@@ -65,67 +65,80 @@ for (i in seq_along(fun_split)) {
 
 
 Aqui selecionamos o core microbiome. O corte de abundância foi baixo, deixando taxa que representam no mónimo 0,5% do total da amostra. Para prevalência, foi selecionado 30% para que ajude na hora de fazer as redes, permitindo uma correlação mais eficiente. A idéia é deixar taxa menos abundantes pois mesmo que o taxon esteja em baixa quantidade, ele pode ter uma função ecológica importante (ver artigo Microbiome dark matter).
-
 ```{r}
-#selecionar os core members
-core_floor_bac <- core(bac_split$Floor, corte_prev = 0.3, corte_abund = 0.05)
-core_wall_bac <- core(bac_split$Wall, corte_prev = 0.3,corte_abund = 0.05)
-core_scalp_bac <- core(bac_split$Scalp, corte_prev = 0.3,corte_abund = 0.05)
-#filtrar os dados originais para manter apenas os core members no formato phyloseq
-core_floor_bac <- subset_taxa(bac_split$Floor, taxa_names(bac_split$Floor) %in% rownames(core_floor_bac))
-core_wall_bac <- subset_taxa(bac_split$Wall, taxa_names(bac_split$Wall) %in% rownames(core_wall_bac)) 
-core_scalp_bac <-  subset_taxa(bac_split$Scalp, taxa_names(bac_split$Scalp) %in% rownames(core_scalp_bac)) 
+source(file = "source/equal_sample_number.R", local = TRUE)
+floor = equal_sample_number(bac_split$Floor, fun_split$Floor)
+wall = equal_sample_number(bac_split$Wall, fun_split$Wall)
+scalp = equal_sample_number(bac_split$Scalp, fun_split$Scalp)
 ```
 
 
 ```{r}
 #selecionar os core members
-core_floor_fun <- core(fun_split$Floor, corte_prev = 0.3, corte_abund = 0.05)
-core_wall_fun <- core(fun_split$Wall, corte_prev = 0.3,corte_abund = 0.05)
-core_scalp_fun <- core(fun_split$Scalp, corte_prev = 0.3,corte_abund = 0.05)
+source(file = "source/core_bacteria.R", local = TRUE)
+core_floor_bac_healthy <- core(floor$bac_healthy, corte_prev = 1/3, corte_abund = 0.0)
+core_floor_bac_sd <- core(floor$bac_sd, corte_prev = 1/3, corte_abund = 0.0)
+
+core_wall_bac_healthy <- core(wall$bac_healthy, corte_prev = 1/3, corte_abund = 0.0)
+core_wall_bac_sd <- core(wall$bac_sd, corte_prev = 1/3, corte_abund = 0.0)
+
+core_scalp_bac_healthy <- core(scalp$bac_healthy, corte_prev = 1/3, corte_abund = 0.00)
+core_scalp_bac_sd <- core(scalp$bac_sd, corte_prev = 1/3, corte_abund = 0.0)
+
 #filtrar os dados originais para manter apenas os core members no formato phyloseq
-core_floor_fun <- subset_taxa(fun_split$Floor, taxa_names(fun_split$Floor) %in% rownames(core_floor_fun))
-core_wall_fun <- subset_taxa(fun_split$Wall, taxa_names(fun_split$Wall) %in% rownames(core_wall_fun)) 
-core_scalp_fun <-  subset_taxa(fun_split$Scalp, taxa_names(fun_split$Scalp) %in% rownames(core_scalp_fun)) 
+mask1 = taxa_names(floor$bac_healthy) %in% rownames(core_floor_bac_healthy)
+floor$bac_healthy <- phyloseq::subset_taxa(floor$bac_healthy, mask1)
+
+mask2 = taxa_names(floor$bac_sd) %in% rownames(core_floor_bac_sd)
+floor$bac_sd <- subset_taxa(floor$bac_sd, mask2)
+
+wall$bac_healthy <- subset_taxa(wall$bac_healthy, taxa_names(wall$bac_healthy) %in% rownames(core_wall_bac_healthy))
+wall$bac_sd <- subset_taxa(wall$bac_sd, taxa_names(wall$bac_sd) %in% rownames(core_wall_bac_sd))
+
+scalp$bac_healthy <- subset_taxa(scalp$bac_healthy, taxa_names(scalp$bac_healthy) %in% rownames(core_scalp_bac_healthy))
+scalp$bac_sd <- subset_taxa(scalp$bac_sd, taxa_names(scalp$bac_sd) %in% rownames(core_scalp_bac_sd))
+```
+
+
+
+```{r}
+#selecionar os core members
+core_floor_fun_healthy <- core(floor$fun_healthy, corte_prev = 1/3, corte_abund = 0.0)
+core_floor_fun_sd <- core(floor$fun_sd, corte_prev = 1/3, corte_abund = 0.0)
+
+core_wall_fun_healthy <- core(wall$fun_healthy, corte_prev = 1/3, corte_abund = 0.0)
+core_wall_fun_sd <- core(wall$fun_sd, corte_prev = 1/3, corte_abund = 0.0)
+
+core_scalp_fun_healthy <- core(scalp$fun_healthy, corte_prev = 1/3, corte_abund = 0.00)
+core_scalp_fun_sd <- core(scalp$fun_sd, corte_prev = 1/3, corte_abund = 0.0)
+
+#filtrar os dados originais para manter apenas os core members no formato phyloseq
+mask1 = taxa_names(floor$fun_healthy) %in% rownames(core_floor_fun_healthy)
+floor$fun_healthy <- phyloseq::subset_taxa(floor$fun_healthy, mask1)
+
+mask2 = taxa_names(floor$fun_sd) %in% rownames(core_floor_fun_sd)
+floor$fun_sd <- subset_taxa(floor$fun_sd, mask2)
+
+wall$fun_healthy <- subset_taxa(wall$fun_healthy, taxa_names(wall$fun_healthy) %in% rownames(core_wall_fun_healthy))
+wall$bac_sd <- subset_taxa(wall$bac_sd, taxa_names(wall$bac_sd) %in% rownames(core_wall_bac_sd))
+
+scalp$fun_healthy <- subset_taxa(scalp$fun_healthy, taxa_names(scalp$fun_healthy) %in% rownames(core_scalp_fun_healthy))
+scalp$fun_sd <- subset_taxa(scalp$fun_sd, taxa_names(scalp$fun_sd) %in% rownames(core_scalp_fun_sd))
 ```
 
 ### Gerar tabela com comparativo de métricas para os metadados 
 
 ```{r}
 #criar lista de objetos para exportação e exportar
-pseq_core <- list(floor_bac = core_floor_bac,
-                      floor_fun = core_floor_fun,
-                      wall_bac = core_wall_bac,
-                      wall_fun = core_wall_fun, 
-                      scalp_bac = core_scalp_bac, 
-                      scalp_fun = core_scalp_fun  )
+pseq_core <- list(floor= floor,
+                  wall = wall,
+                  scalp = scalp )
 
 ```
 
-
-```{r}
-source(file = "source/descrever_phyloseq_lista.R", local = TRUE)
-
-# Utilizando a função para comparar os phyloseqs na lista e obter as estatísticas resumidas de abundância
-#para bacteria
-estatisticas_bac = cbind(descrever_phyloseqs_lista(bac_split),
-                         descrever_phyloseqs_lista(pseq_core[c("floor_bac","wall_bac","scalp_bac")]))
-names(estatisticas_bac) = c("Floor","Scalp", "Wall","Floor (Core)", "Wall (Core)", "Scalp (Core)")
-#para fungos
-estatisticas_fun = cbind(descrever_phyloseqs_lista(fun_split),
-                         descrever_phyloseqs_lista(pseq_core[c("floor_fun","wall_fun","scalp_fun")])
-                         )
-names(estatisticas_bac) = c("Floor","Scalp", "Wall","Floor (Core)", "Wall (Core)", "Scalp (Core)")
-print(estatisticas_bac)
-print(estatisticas_fun)
-```
-
-Podemos ver que para bactérias, a média é bem menor que o valor máximo, indicando que há muitas bactérias com poucas reads, isto é especialmente verdadeiro para o couro cabeludo, em que a média é bem maior que a mediana. 
-
-Para fungos, vemos o mesmo padrão, provavelmente por Malassezia dominar a proporção de reads.
 ## Exportação dos dados
 ```{r}
 #salvar como objeto R na pasta de dados
-save(pseq_core, file =  "data/processed/pseq_core.rds")
+save(pseq_core, file =  "data/processed/pseq_core14102024.rds")
 ```
 

@@ -13,12 +13,11 @@
 #' core_bacteria(enterotype, corte_prev = 0.1, corte_abund = 0.05)
 #' }
 #' @export
-core = function(pseq, corte_prev = 0, corte_abund = 0.1){
+core = function(pseq, corte_prev, corte_abund){
   library(microbiome)
-  
+  pseq <- microbiome::transform(pseq, transform = "compositional")
   # Identifica as taxas principais com base nos cortes de prevalência e abundância
   core_taxa <- core_members(pseq, detection = corte_abund, prevalence = corte_prev)
-  
   # Verifica se foram encontradas taxas principais
   if (length(core_taxa) == 0) {
     print("Nenhuma taxa principal encontrada com os cortes especificados.")
